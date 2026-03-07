@@ -1,0 +1,6 @@
+.env
+__pycache__/
+temp_uploads/
+*.wav
+*.pdf
+*.jpg

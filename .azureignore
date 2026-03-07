@@ -1,0 +1,9 @@
+.env
+__pycache__/
+temp_uploads/
+temp_audio/
+*.wav
+*.pdf
+*.jpg
+.DS_Store
+requirements.txt.full

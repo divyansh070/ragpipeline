@@ -5,6 +5,8 @@ try:
     import langchain_anthropic
     import langchain_openai
     import langchain_google_genai
+    import pydantic
+    print(f"✅ Pydantic version: {pydantic.__version__}")
     print("✅ All LangChain packages imported successfully!")
 except ImportError as e:
     print(f"❌ Import failed: {e}")

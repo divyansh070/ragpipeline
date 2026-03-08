@@ -3,7 +3,7 @@ import json
 import urllib.request
 from dotenv import load_dotenv
 
-# 1. Load the API key from your .env file
+# 1. Load the API key from your .env file sajdkasjdlk
 load_dotenv()
 api_key = os.getenv("GOOGLE_API_KEY")
 

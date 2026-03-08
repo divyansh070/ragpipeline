@@ -4,3 +4,6 @@ temp_uploads/
 *.wav
 *.pdf
 *.jpg
+.venv/
+.DS_Store
+node_modules/

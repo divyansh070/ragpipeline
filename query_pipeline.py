@@ -1,14 +1,27 @@
-
-
 import os
 from dotenv import load_dotenv
-from langchain_google_genai import ChatGoogleGenerativeAI, GoogleGenerativeAIEmbeddings
+from langchain_openai import ChatOpenAI
+from langchain_google_genai import GoogleGenerativeAIEmbeddings
 from langchain_core.messages import SystemMessage, HumanMessage, AIMessage
 from azure.core.credentials import AzureKeyCredential
 from azure.search.documents import SearchClient
 from azure.search.documents.models import VectorizedQuery
 
 load_dotenv()
+
+# DIAGNOSTIC: Check if keys are loaded
+openrouter_key = os.getenv("OPENROUTER_API_KEY")
+google_key = os.getenv("GOOGLE_API_KEY")
+
+if not openrouter_key:
+    print("[ERROR] OPENROUTER_API_KEY not found!")
+else:
+    print(f"[DEBUG] OpenRouter Key active (starts with: {openrouter_key[:10]}...)")
+
+if not google_key:
+    print("[ERROR] GOOGLE_API_KEY not found! Embeddings will fail.")
+else:
+    print(f"[DEBUG] Gemini Key active for embeddings (starts with: {google_key[:5]}...)")
 
 # ==========================================
 # 1. SETUP CLOUD CLIENTS
@@ -18,9 +31,30 @@ SEARCH_KEY = os.getenv("AZURE_SEARCH_ADMIN_KEY")
 INDEX_NAME = "curriculum-index"
 
 search_client = SearchClient(endpoint=SEARCH_ENDPOINT, index_name=INDEX_NAME, credential=AzureKeyCredential(SEARCH_KEY))
-llm = ChatGoogleGenerativeAI(model="gemini-2.5-flash", temperature=0.2)
+
+# OpenRouter Configuration
+OR_BASE_URL = "https://openrouter.ai/api/v1"
+
+# Define LLMs using OpenRouter model IDs for reliable chat
+primary_llm = ChatOpenAI(
+    model="google/gemini-2.0-flash-001",
+    openai_api_key=openrouter_key,
+    base_url=OR_BASE_URL,
+    temperature=0.2
+)
+
+fallbacks = [
+    ChatOpenAI(model="google/gemini-flash-1.5", openai_api_key=openrouter_key, base_url=OR_BASE_URL, temperature=0.2),
+    ChatOpenAI(model="google/gemini-pro-1.5", openai_api_key=openrouter_key, base_url=OR_BASE_URL, temperature=0.2),
+    ChatOpenAI(model="anthropic/claude-3-haiku", openai_api_key=openrouter_key, base_url=OR_BASE_URL, temperature=0.2)
+]
+llm = primary_llm.with_fallbacks(fallbacks)
+
+# Embeddings (Crucial for search)
+# Note: Using native Google SDK for embeddings as OpenRouter doesn't support them
 gemini_embeddings = GoogleGenerativeAIEmbeddings(
     model="models/gemini-embedding-001",
+    google_api_key=google_key,
     task_type="RETRIEVAL_QUERY",
     output_dimensionality=768
 )
@@ -28,22 +62,29 @@ gemini_embeddings = GoogleGenerativeAIEmbeddings(
 # ==========================================
 # STAGE 1: ANALYZE NOTES
 # ==========================================
+def _get_text_content(res) -> str:
+    """Helper to ensure we get a string from the LLM response content."""
+    content = res.content
+    if isinstance(content, list):
+        return "".join([c if isinstance(c, str) else str(c.get("text", "")) for c in content])
+    return str(content)
+
 def extract_core_topic(ocr_notes_text: str) -> str:
     prompt = f"Read these notes and extract the core scientific topic. Return ONLY a 3-7 word search query.\n\nNOTES:\n{ocr_notes_text}"
-    return llm.invoke(prompt).content.strip()
+    return _get_text_content(llm.invoke(prompt)).strip()
+
+def generate_summary(ocr_notes_text: str) -> str:
+    prompt = f"Provide a brief, encouraging, 1-2 sentence summary of these notes, acting as a helpful tutor. Speak purely in English.\n\nNOTES:\n{ocr_notes_text}"
+    return _get_text_content(llm.invoke(prompt)).strip()
 
 # ==========================================
 # STAGE 2: FETCH CHUNKS & CONVERSE (WITH MEMORY)
 # ==========================================
-def fetch_top_10_and_answer(core_topic: str, user_question: str, ocr_notes: str, chat_history: list = None) -> str:
-    """
-    Takes the new question, fetches textbook context, and uses past chat history 
-    to maintain a natural, ongoing conversation.
-    """
+def fetch_top_10_and_answer(core_topic: str, user_question: str, ocr_notes: str, chat_history: list = None, screenshot_text: str = None) -> str:
     if chat_history is None:
         chat_history = []
         
-    print(f"-> Fetching top 10 chunks for question: '{user_question}'")
+    print(f"-> Fetching textbook context for: '{user_question}'")
     
     # 1. Vector Search
     combined_search_query = f"{core_topic} - {user_question}"
@@ -54,36 +95,38 @@ def fetch_top_10_and_answer(core_topic: str, user_question: str, ocr_notes: str,
     
     textbook_context = "\n".join([f"--- CHUNK {i+1} ---\n{res['content']}" for i, res in enumerate(results)])
     
-    # 2. Build the System Persona & Context
+    # 2. Build system instructions
+    screenshot_context = f"\n    CURRENT IMAGE CONTENT (Prioritize this for the current question):\n    {screenshot_text}\n" if screenshot_text else ""
+    
     system_instructions = f"""
     You are an expert, encouraging STEM tutor. You are having an ongoing conversation with a student.
     
     RULES:
     - Base your answers on the provided notes and textbook excerpts.
     - If the student refers to something you said previously, use the chat history to understand the context.
-    - Use conversational Hindi syntax but keep scientific terms in English (Hinglish).
+    - Respond in the same language as the student's question.
+    - If a 'CURRENT IMAGE CONTENT' is provided, the student is likely asking about that specific image/screenshot. Focus your answer on it while maintaining technical accuracy.
     
-    STUDENT'S NOTES:
+    STUDENT'S ORIGINAL NOTES:
     {ocr_notes}
+    {screenshot_context}
     
     TOP 10 TEXTBOOK EXCERPTS:
     {textbook_context}
     """
     
-    # 3. Assemble the conversation sequence
+    # 3. Assemble message sequence
     messages = [SystemMessage(content=system_instructions)]
     
-    # Inject the past memory into the LLM
     for msg in chat_history:
         if msg.get("role") == "user":
             messages.append(HumanMessage(content=msg.get("content")))
-        elif msg.get("role") == "assistant":
+        elif msg.get("role") in ["assistant", "ai"]:
             messages.append(AIMessage(content=msg.get("content")))
             
-    # Add the brand new question at the end
     messages.append(HumanMessage(content=user_question))
     
-    # 4. Generate the conversational response
-    print("-> Generating conversational Hinglish response...")
+    # 4. Generate response
+    print("-> Generating tutor response via OpenRouter...")
     response = llm.invoke(messages)
-    return response.content
+    return _get_text_content(response)

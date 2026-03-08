@@ -2,24 +2,41 @@ import os
 from dotenv import load_dotenv
 from azure.core.credentials import AzureKeyCredential
 from azure.ai.documentintelligence import DocumentIntelligenceClient
-from langchain_google_genai import ChatGoogleGenerativeAI
+from langchain_openai import ChatOpenAI
 
 load_dotenv()
+
+# OpenRouter Configuration
+openrouter_key = os.getenv("OPENROUTER_API_KEY")
+OR_BASE_URL = "https://openrouter.ai/api/v1"
+
+# DIAGNOSTIC: Check if keys are loaded
+if not openrouter_key:
+    print("[ERROR] OPENROUTER_API_KEY not found!")
+else:
+    print(f"[DEBUG] OpenRouter Key active (starts with: {openrouter_key[:10]}...)")
 
 ENDPOINT = os.getenv("DOC_INTEL_ENDPOINT")
 KEY = os.getenv("DOC_INTEL_KEY")
 
-# Initialize the LLM we know works perfectly for your account
-llm = ChatGoogleGenerativeAI(
-    model="gemini-flash-lite-latest",
-    temperature=0.1 # Keep it low so it focuses on grammar, not creativity
+# Initialize LLM with fallbacks from OpenRouter
+primary_llm = ChatOpenAI(
+    model="google/gemini-2.0-flash-001",
+    openai_api_key=openrouter_key,
+    base_url=OR_BASE_URL,
+    temperature=0.1
 )
+
+fallbacks = [
+    ChatOpenAI(model="google/gemini-flash-1.5", openai_api_key=openrouter_key, base_url=OR_BASE_URL, temperature=0.1),
+    ChatOpenAI(model="anthropic/claude-3-haiku", openai_api_key=openrouter_key, base_url=OR_BASE_URL, temperature=0.1)
+]
+llm = primary_llm.with_fallbacks(fallbacks)
 
 def extract_text_from_file(file_path: str) -> str:
     print(f"Scanning {file_path} with Azure OCR...")
     client = DocumentIntelligenceClient(endpoint=ENDPOINT, credential=AzureKeyCredential(KEY))
     
-    # Determine the file type automatically
     file_extension = file_path.lower().split('.')[-1]
     content_type = "application/pdf" if file_extension == "pdf" else "application/octet-stream"
     
@@ -34,39 +51,21 @@ def extract_text_from_file(file_path: str) -> str:
     return poller.result().content
 
 def clean_ocr_text(raw_text: str) -> str:
-    print("Cleaning up cursive mistakes and bleed-through text...")
-    
     prompt = f"""
     You are an expert transcriber. I am providing you with raw OCR text from handwritten engineering notes. 
     
     Your job is to:
-    1. Fix obvious cursive spelling mistakes using the surrounding context (e.g., if it says "Dynamic lucrou", context implies it should be "Dynamic error").
-    2. Ignore random bleed-through numbers (like standalone 5s or 9s) or gibberish.
-    3. IMPORTANT: The OCR sometimes hides valid, handwritten sentences inside HTML tags like . You MUST extract the valid text from inside those tags!
-    4. Return ONLY the cleaned, perfectly readable markdown text. Do not add conversational filler.
+    1. Fix obvious cursive spelling mistakes using the surrounding context.
+    2. Ignore random bleed-through numbers or gibberish.
+    3. IMPORTANT: Extract valid text from inside HTML tags if they contain valid sentences.
+    4. Return ONLY the cleaned, perfectly readable markdown text.
     
     RAW OCR TEXT:
     {raw_text}
     """
     
     response = llm.invoke(prompt)
-    return response.content
-
-if __name__ == "__main__":
-    test_file_name = "messy_notes.jpg" # This can now be a .jpg or a .pdf!
-    
-    try:
-        # Step 1: Raw Azure OCR (FIXED FUNCTION NAME HERE)
-        raw_text = extract_text_from_file(test_file_name)
-        
-        # Step 2: AI Cleanup
-        clean_text = clean_ocr_text(raw_text)
-        
-        print("\n====== PERFECTED TEXT ======")
-        print(clean_text)
-        print("============================\n")
-        
-    except FileNotFoundError:
-        print(f"Error: Could not find '{test_file_name}'.")
-    except Exception as e:
-        print(f"An error occurred: {e}")
+    content = response.content
+    if isinstance(content, list):
+        return "".join([c if isinstance(c, str) else str(c.get("text", "")) for c in content])
+    return str(content)

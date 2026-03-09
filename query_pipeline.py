@@ -77,6 +77,50 @@ def generate_summary(ocr_notes_text: str) -> str:
     prompt = f"Provide a brief, encouraging, 1-2 sentence summary of these notes, acting as a helpful tutor. Speak purely in English.\n\nNOTES:\n{ocr_notes_text}"
     return _get_text_content(llm.invoke(prompt)).strip()
 
+def generate_flash_notes(ocr_notes_text: str) -> str:
+    prompt = f"Create a set of concise, high-impact flash notes from the following text. Use bullet points and focus on key concepts and definitions.\n\nTEXT:\n{ocr_notes_text}"
+    return _get_text_content(llm.invoke(prompt)).strip()
+
+def generate_quiz(ocr_notes_text: str) -> list:
+    import json
+    prompt = f"""
+    Generate 5 multiple-choice questions based on the following notes. 
+    Each question should have 4 options and 1 correct answer.
+    Return the output ONLY as a raw JSON list of objects. Do not include markdown formatting like ```json.
+    Each object must have:
+    - "question": string
+    - "options": list of 4 strings
+    - "answer": string (must match one of the options)
+
+    NOTES:
+    {ocr_notes_text}
+    """
+    response = llm.invoke(prompt)
+    content = _get_text_content(response).strip()
+    
+    # Clean up markdown if the LLM ignores instructions
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+    
+    try:
+        return json.loads(content.strip())
+    except Exception as e:
+        print(f"[ERROR] Failed to parse quiz JSON: {e}")
+        return []
+
+def generate_flowchart(ocr_notes_text: str) -> str:
+    prompt = f"""
+    Create a Mermaid.js flowchart representing the key process, hierarchy, or relationship described in the following notes.
+    Keep it simple and readable. Return ONLY the mermaid code starting with 'graph TD' or 'flowchart TD'.
+    Do not include markdown code blocks.
+
+    NOTES:
+    {ocr_notes_text}
+    """
+    return _get_text_content(llm.invoke(prompt)).strip()
+
 # ==========================================
 # STAGE 2: FETCH CHUNKS & CONVERSE (WITH MEMORY)
 # ==========================================

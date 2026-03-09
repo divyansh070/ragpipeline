@@ -55,17 +55,23 @@ def handle_upload():
         raw_text = extract_text_from_file(filepath)
         clean_notes = clean_ocr_text(raw_text)
         
-        # 2. Parallel Processing for Topic, Summary, and TTS
+        # 2. Parallel Processing for Topic, Summary, Quiz, Notes, and Flowchart
         from concurrent.futures import ThreadPoolExecutor
+        from query_pipeline import generate_flash_notes, generate_quiz, generate_flowchart
         with ThreadPoolExecutor() as executor:
-            # Fire off topic extraction
+            # Fire off all extraction tasks
             topic_future = executor.submit(extract_core_topic, clean_notes)
-            # Fire off summary generation
             summary_future = executor.submit(generate_summary, clean_notes)
+            flash_notes_future = executor.submit(generate_flash_notes, clean_notes)
+            quiz_future = executor.submit(generate_quiz, clean_notes)
+            flowchart_future = executor.submit(generate_flowchart, clean_notes)
             
             # Wait for results
             core_topic = topic_future.result()
             summary = summary_future.result()
+            flash_notes = flash_notes_future.result()
+            quiz = quiz_future.result()
+            flowchart = flowchart_future.result()
 
         # 3. Audio Generation (Starts as soon as summary is ready)
         unique_audio_name = f"summary_{uuid.uuid4().hex}.wav"
@@ -81,6 +87,9 @@ def handle_upload():
             "extracted_notes": clean_notes,
             "topic": core_topic,
             "summary": summary,
+            "flash_notes": flash_notes,
+            "quiz": quiz,
+            "flowchart": flowchart,
             "audio_base64": audio_base64
         }), 200
         

@@ -110,16 +110,33 @@ def generate_quiz(ocr_notes_text: str) -> list:
         print(f"[ERROR] Failed to parse quiz JSON: {e}")
         return []
 
-def generate_flowchart(ocr_notes_text: str) -> str:
+def generate_flowchart(ocr_notes_text: str) -> dict:
+    import json
     prompt = f"""
-    Create a Mermaid.js flowchart representing the key process, hierarchy, or relationship described in the following notes.
-    Keep it simple and readable. Return ONLY the mermaid code starting with 'graph TD' or 'flowchart TD'.
-    Do not include markdown code blocks.
+    Create a JSON structure representing a flowchart of the key process, hierarchy, or relationship described in the following notes.
+    The output should be a JSON object with two fields:
+    1. "nodes": A list of objects, each with "id" (string) and "label" (string).
+    2. "edges": A list of objects, each with "from" (string id) and "to" (string id).
+
+    Return ONLY the raw JSON object. Do not include markdown formatting.
 
     NOTES:
     {ocr_notes_text}
     """
-    return _get_text_content(llm.invoke(prompt)).strip()
+    response = llm.invoke(prompt)
+    content = _get_text_content(response).strip()
+    
+    # Clean up markdown if the LLM ignores instructions
+    if content.startswith("```"):
+        content = content.split("```")[1]
+        if content.startswith("json"):
+            content = content[4:]
+    
+    try:
+        return json.loads(content.strip())
+    except Exception as e:
+        print(f"[ERROR] Failed to parse flowchart JSON: {e}")
+        return {"nodes": [], "edges": []}
 
 # ==========================================
 # STAGE 2: FETCH CHUNKS & CONVERSE (WITH MEMORY)

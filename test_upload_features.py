@@ -32,7 +32,8 @@ def test_new_features():
     print("\n--- Testing Flowchart ---")
     flowchart = generate_flowchart(test_text)
     print(flowchart)
-    assert "graph" in flowchart or "flowchart" in flowchart, "Flowchart should contain mermaid syntax"
+    assert isinstance(flowchart, dict), "Flowchart should be a dictionary"
+    assert "nodes" in flowchart and "edges" in flowchart, "Flowchart should have nodes and edges"
 
     print("\n✅ All tests passed!")
 
